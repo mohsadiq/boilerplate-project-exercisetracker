@@ -2,127 +2,139 @@ const express = require('express')
 const app = express()
 const cors = require('cors')
 require('dotenv').config()
-const bodyParser = require("body-parser")
-const mongoose = require("mongoose")
-mongoose.connect(process.env.MLAB_URI || "mongodb+srv://admin:admin@cluster0.ujqtzlw.mongodb.net/movies?retryWrites=true&w=majority&appName=Cluster0")
+let bodyParser = require('body-parser');
 
+let mongoose;
+try {
+  mongoose = require("mongoose");
+} catch (e) {
+  console.log(e);
+}
+
+// Mongoose Set Up
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+const Schema = mongoose.Schema;
+
+// User
+const userSchema = new Schema({
+  username: { type: String, required: true }
+})
+let userModel = mongoose.model("user", userSchema);
+
+// Exercise
+const exerciseSchema = new Schema({
+  userId: { type: String, required: true },
+  description: { type: String, required: true },
+  duration: { type: Number, required: true },
+  date: { type: Date, default: new Date() }
+})
+let exerciseModel = mongoose.model("exercise", exerciseSchema);
 
 app.use(cors())
 app.use(express.static('public'))
+app.use("/", bodyParser.urlencoded({ extended: false }));
+
 app.get('/', (req, res) => {
   res.sendFile(__dirname + '/views/index.html')
 });
 
+app.post('/api/users', (req, res) => {
+  let username = req.body.username;
+  let newUser = new userModel({ username: username });
+  newUser.save();
+  res.json(newUser);
+})
 
-app.post(
-  "/api/exercise/new-user",
-  function(req, res, next) {
-    const username = req.body.username;
-    if (username === "") {
-      return res.send("`username` is required.");
-    } else next();
-  },
-  function(req, res) {
-    const username = req.body.username;
-    var promise = controller.checkUsername(username);
-    promise
-      .then(function(data) {
-        if (data.status) return controller.saveNewUser(username);
-        else return controller.throw_promise_error("username already taken");
-      })
-      .then(function(data) {
-        return res.json({ username: data.username, _id: data._id });
-      })
-      .catch(function(reason) {
-        return res.send(reason);
-      });
+app.get('/api/users', (req, res) => {
+  userModel.find({}).then((users) => {
+    res.json(users);
+  })
+})
+
+app.post('/api/users/:_id/exercises', (req, res) => {
+  console.log(req.body);
+
+
+  let userId = req.params._id;
+  
+  exerciseObj = {
+    userId: userId,
+    description: req.body.description,
+    duration: req.body.duration
   }
-);
 
-app.post(
-  "/api/exercise/add",
-  function(req, res, next) {
-    var params = req.body;
-    var notFound = [];
-    if (params.userId === "") {
-      notFound.push("`userId`");
-    }
-    if (params.description === "") {
-      notFound.push("`description`");
-    }
-    if (params.duration === "") {
-      notFound.push("`duration`");
-    }
-    if (params.date === "") {
-      req.body.date = new Date();
-    }
-
-    if (notFound.length > 0) return res.send(notFound.toString() + " required");
-    else next();
-  },
-  function(req, res) {
-    var exercise = {
-      description: req.body.description,
-      duration: req.body.duration,
-      date: req.body.date
-    };
-    var promise = controller.saveExercise(req.body.userId, exercise);
-    promise
-      .then(function(data) {
-        return res.json(
-          Object.assign({ username: data.username, _id: data._id }, exercise)
-        );
-      })
-      .catch(function(reason) {
-        return res.send(reason);
-      });
+  // If there is a date add it to the object
+  if (req.body.date != ''){
+    exerciseObj.date = req.body.date
   }
-);
 
-app.get("/api/exercise/log", function(req, res) {
-  var promise = controller.getUserDetails(req.query.userId);
-  promise
-    .then(function(data) {
-      return res.json(
-        controller.formatOutput(
-          data,
-          req.query.limit,
-          req.query.to,
-          req.query.from
-        )
-      );
+  let newExercise = new exerciseModel(exerciseObj);
+
+  userModel.findById(userId, (err, userFound) => {
+    if (err) console.log(err);
+
+    newExercise.save();
+    res.json({
+      _id: userFound._id, username: userFound.username,
+      description: newExercise.description, duration: newExercise.duration,
+      date: new Date(newExercise.date).toDateString()
     })
-    .catch(function(reason) {
-      return res.json(reason);
-    });
-});
+  })
+})
 
-// Not found middleware
-app.use((req, res, next) => {
-  return next({ status: 404, message: "not found" });
-});
+app.get('/api/users/:_id/logs', (req, res) => {
 
-// Error Handling middleware
-app.use((err, req, res, next) => {
-  let errCode, errMessage;
+  let fromParam = req.query.from;
+  let toParam = req.query.to;
+  let limitParam = req.query.limit;  
+  let userId = req.params._id;
 
-  if (err.errors) {
-    // mongoose validation error
-    errCode = 400; // bad request
-    const keys = Object.keys(err.errors);
-    // report the first validation error
-    errMessage = err.errors[keys[0]].message;
-  } else {
-    // generic or custom error
-    errCode = err.status || 500;
-    errMessage = err.message || "Internal Server Error";
-  }
-  res
-    .status(errCode)
-    .type("txt")
-    .send(errMessage);
-});
+  // If limit param exists set it to an integer
+  limitParam = limitParam ? parseInt(limitParam): limitParam
 
+  userModel.findById(userId, (err, userFound) => {
+    if (err) return console.log(err);
+    console.log(userFound);
+    
+      let queryObj = {
+        userId: userId
+      };
+      // If we have a date add date params to the query
+      if (fromParam || toParam){
+    
+          queryObj.date = {}
+          if (fromParam){
+            queryObj.date['$gte'] = fromParam;
+          }
+          if (toParam){
+            queryObj.date['$lte'] = toParam;
+          }
+        }
+
+    
+    exerciseModel.find(queryObj).limit(limitParam).exec((err, exercises) => {
+      if (err) return console.log(err);
+  
+      let resObj = 
+        {_id: userFound._id,
+         username: userFound.username
+        }
+  
+      exercises = exercises.map((x) => {
+        return {
+          description: x.description,
+          duration: x.duration,
+          date: new Date(x.date).toDateString()
+        }
+      })
+      resObj.log = exercises;
+      resObj.count = exercises.length;
+      
+      res.json(resObj);
+    })
+    
+  })
+})
 
 
 const listener = app.listen(process.env.PORT || 3000, () => {
